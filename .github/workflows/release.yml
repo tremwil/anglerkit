@@ -1,0 +1,46 @@
+name: Release
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check-release-readiness:
+    if: github.event_name == 'pull_request'
+    name: Check release readiness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check version was bumped
+        run: python ./.github/scripts/assert_version_bump.py
+      - name: Publish dry-run
+        run: cargo publish --dry-run
+      - name: Generate release notes
+        run: python ./.github/scripts/release_notes.py
+
+  publish:
+    if: github.event_name == 'push'
+    name: cargo publish and create release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: crates.io publish
+        run: cargo publish --token ${{ secrets.CRATES_IO_TOKEN }}
+        
+      - name: Get package version
+        id: get_version
+        run: echo "version=$(python ./.github/scripts/package_version.py)" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes
+        run: python ./.github/scripts/release_notes.py > release-notes.md
+
+      - name: GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.get_version.outputs.version }}
+          body_path: release-notes.md
