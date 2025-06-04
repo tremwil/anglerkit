@@ -1,6 +1,7 @@
 // We need this build script to handle Thumb mode for ARM on a stable
 // release channel, where `target_feature = "thumb_mode"` isn't available.
 fn main() {
+    println!("cargo::rustc-check-cfg=cfg(loom)");
     println!("cargo::rustc-check-cfg=cfg(thumb_mode)");
 
     let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap();
