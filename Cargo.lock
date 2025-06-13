@@ -9,9 +9,10 @@ dependencies = [
  "clear-cache",
  "closure-ffi",
  "iced-x86",
+ "lock_api",
  "rand",
  "region",
- "spin",
+ "talc",
  "thiserror",
  "yaxpeax-arm",
 ]
@@ -70,9 +71,9 @@ dependencies = [
 
 [[package]]
 name = "closure-ffi"
-version = "2.3.0"
+version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "939c025c4f48f019396e1636ad11648abd8f500cbcf07a63f9f264f7258d43ed"
+checksum = "d3435cc338248c7314b5f3d8e74820c4c68d147c9766b93ab07fffc303c4a121"
 dependencies = [
  "jit-allocator2",
  "libc",
@@ -358,6 +359,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "talc"
+version = "4.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3fcad3be1cfe36eb7d716a04791eba36a197da9d9b6ea1e28e64ac569da3701d"
+dependencies = [
+ "lock_api",
 ]
 
 [[package]]

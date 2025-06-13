@@ -1,4 +1,5 @@
 #![cfg_attr(feature = "no_std", no_std)]
+#![deny(unsafe_op_in_unsafe_fn)]
 
 #[cfg(feature = "no_std")]
 extern crate alloc as _liballoc;

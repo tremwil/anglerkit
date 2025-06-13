@@ -4,22 +4,29 @@ version = "0.0.0"
 description = "In-development function hooking/detouring library"
 edition = "2021"
 authors = ["William Tremblay <tremwil@users.noreply.github.com>"]
-keywords = ["detour", "hooking", "modding", "hacking"]
+keywords = ["detour", "hooking", "modding", "hacking", "instrumentation"]
 categories = ["security", "no-std"]
 license = "MIT"
 repository = "https://github.com/tremwil/anglerkit"
 
 [features]
-default = ["closure-ffi/bundled_jit_alloc"]
-no_std = ["closure-ffi/no_std", "dep:spin"]
-nightly = ["closure-ffi/unstable", "closure-ffi/tuple_trait"]
+default = ["closure-ffi/bundled_jit_alloc", "dep:region"]
+no_std = ["closure-ffi/no_std"]
+unstable = [
+    "closure-ffi/unstable", 
+    "closure-ffi/tuple_trait", 
+    "closure-ffi/c_variadic",
+    "talc/allocator",
+    "talc/nightly_api"
+]
 
 [dependencies]
 thiserror = "2.0"
-closure-ffi = { version = "2.3.0", default-features = false }
+closure-ffi = { version = "2.4.0", default-features = false }
+talc = { version = "4.4.2", default-features = false, features = ["lock_api"] }
+lock_api = "0.4.13"
 clear-cache = "0.1.1"
-region = "3.0.2"
-spin = { version = "0.10", optional = true }
+region = { version = "3.0.2", optional = true }
 
 [target.'cfg(any(target_arch = "x86", target_arch = "x86_64"))'.dependencies]
 iced-x86 = "1.21"

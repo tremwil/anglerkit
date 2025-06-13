@@ -1,116 +1,170 @@
-//! Implements typed read-write-execute memory allocators.
+//! Implements read-write-execute memory allocators.
 
-mod atomic_slab;
-mod slab_pool;
+use core::{alloc::Layout, ptr::NonNull};
 
-/// Allocation error.
+#[cfg(not(feature = "no_std"))]
+mod region;
+
+pub mod block;
+
+/// Allocation error describing the different failure scenarios of a [`NearAllocator`].
 #[derive(thiserror::Error, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Error {
+pub enum AllocError {
+    /// The allocator ran out of memory.
     #[error("Out of memory")]
     OutOfMemory,
-    #[error("No suitable region found for near allocation")]
+    /// The allocation address restrictions (e.g. within a range of addresses) could be
+    /// satisfied.
+    #[error("No suitable region found satisfying address restrictions")]
     NoSuitableRegion,
+    /// The layout being allocated is not supported by the allocator (e.g. the size or
+    /// alignment is too large).
+    #[error("Cannot allocate the provided layout")]
+    UnsupportedLayout,
+    /// An operating system call (e.g. mmap/VirtualAlloc) that was required for
+    /// allocation failed.
+    #[error("A call to the operating system failed during allocation")]
+    OsError,
+    /// An opaque implementation-specific error occured. Avoid using this error variant
+    /// unless none of the others describe the error.
+    #[error("Internal allocator error")]
+    Internal,
 }
 
-/// Types that wrap a raw pointer to a value of `T`.
-pub trait AsPtr<T> {
-    fn as_ptr(&self) -> *const T;
-    fn as_ptr_mut(&mut self) -> *mut T;
+/// Types which can be converted to a *mut T through an immutable reference.
+pub trait AsMutPtr<T> {
+    fn as_mut_ptr(&self) -> *mut T;
 }
 
-/// Raw executable memory allocator that allows allocating arbitrary amounts of
-/// read-write-executable memory near an address.
+impl<T> AsMutPtr<T> for *mut T {
+    fn as_mut_ptr(&self) -> *mut T {
+        *self
+    }
+}
+
+impl<T> AsMutPtr<T> for NonNull<T> {
+    fn as_mut_ptr(&self) -> *mut T {
+        self.as_ptr()
+    }
+}
+
+/// Allocator that allows allocating read-write-executable memory conforming to a
+/// specific [`Layout`] and within a particular address range.
+///
+/// # Safety
+/// Implementors must satisfy the same [safety
+/// guarantees](core::alloc::Allocator#safety) as that of the experimental
+/// [`Allocator`](core::alloc::Allocator) trait.
 pub unsafe trait NearAllocator {
-    /// Allocate at least `size` bytes of executable memory. All bytes of
+    type Ptr: AsMutPtr<u8>;
+
+    /// Allocate executable memory according to the provided [`Layout`]. All bytes of
+    /// allocated storage are guaranteed to lie within `range`.
+    /// `address`.
+    ///
+    /// # Safety
+    /// `layout.size()` must be nonzero.
+    unsafe fn alloc_within(
+        &self,
+        range: core::ops::Range<usize>,
+        layout: Layout,
+    ) -> Result<Self::Ptr, AllocError>;
+
+    /// Allocate executable memory according to the provided [`Layout`].
+    ///
+    /// # Safety
+    /// `layout.size()` must be nonzero.
+    unsafe fn alloc(&self, layout: Layout) -> Result<Self::Ptr, AllocError> {
+        unsafe { self.alloc_within(0..usize::MAX, layout) }
+    }
+
+    /// Allocate executable memory according to the provided [`Layout`]. All bytes of
     /// allocated storage will be at most `displacement` bytes away from
     /// `address`.
-    fn alloc_near(
+    ///
+    /// # Safety
+    /// `layout.size()` must be nonzero.
+    unsafe fn alloc_near(
         &self,
         address: usize,
         displacement: usize,
-        size: usize,
-    ) -> Result<*mut [u8], Error>;
+        layout: Layout,
+    ) -> Result<Self::Ptr, AllocError> {
+        // minimum address at which the layout could be allocated
+        let min_addr = address.saturating_sub(displacement);
+        let min_addr = min_addr
+            .checked_next_multiple_of(layout.align())
+            .ok_or(AllocError::NoSuitableRegion)?;
+
+        // maximum address at which the end of layout could be allocated
+        let max_addr = address.saturating_add(displacement) & (layout.align() - 1);
+
+        unsafe { self.alloc_within(min_addr..max_addr, layout) }
+    }
 
     /// Free a pointer returned by [`alloc_near`].
     ///
     /// # Safety
     /// - The pointer must have been previously allocated through
-    ///   [`NearAllocator::alloc_near`].
-    unsafe fn free(&self, ptr: *mut u8);
+    ///   [`alloc`](NearAllocator::alloc), [`alloc_within`](NearAllocator::alloc_within)
+    ///   or [`alloc_near`](NearAllocator::alloc_near) with the same `layout`.
+    unsafe fn free(&self, ptr: Self::Ptr, layout: Layout);
 }
 
-unsafe impl<'a, A: NearAllocator> NearAllocator for &'a A {
-    fn alloc_near(
+unsafe impl<A: NearAllocator> NearAllocator for &A {
+    type Ptr = A::Ptr;
+
+    unsafe fn alloc(&self, layout: Layout) -> Result<Self::Ptr, AllocError> {
+        unsafe { (**self).alloc(layout) }
+    }
+
+    unsafe fn alloc_near(
         &self,
         address: usize,
         displacement: usize,
-        size: usize,
-    ) -> Result<*mut [u8], Error> {
-        (**self).alloc_near(address, displacement, size)
+        layout: Layout,
+    ) -> Result<Self::Ptr, AllocError> {
+        unsafe { (**self).alloc_near(address, displacement, layout) }
     }
 
-    unsafe fn free(&self, ptr: *mut u8) {
-        (**self).free(ptr);
+    unsafe fn alloc_within(
+        &self,
+        range: core::ops::Range<usize>,
+        layout: Layout,
+    ) -> Result<Self::Ptr, AllocError> {
+        unsafe { (**self).alloc_within(range, layout) }
+    }
+
+    unsafe fn free(&self, ptr: Self::Ptr, layout: Layout) {
+        unsafe { (**self).free(ptr, layout) };
     }
 }
 
 unsafe impl<A: NearAllocator> NearAllocator for crate::liballoc::boxed::Box<A> {
-    fn alloc_near(
+    type Ptr = A::Ptr;
+
+    unsafe fn alloc(&self, layout: Layout) -> Result<Self::Ptr, AllocError> {
+        unsafe { (**self).alloc(layout) }
+    }
+
+    unsafe fn alloc_near(
         &self,
         address: usize,
         displacement: usize,
-        size: usize,
-    ) -> Result<*mut [u8], Error> {
-        (**self).alloc_near(address, displacement, size)
+        layout: Layout,
+    ) -> Result<Self::Ptr, AllocError> {
+        unsafe { (**self).alloc_near(address, displacement, layout) }
     }
 
-    unsafe fn free(&self, ptr: *mut u8) {
-        (**self).free(ptr);
-    }
-}
-
-/// Typed executable memory allocator suitable for storing thunks/trampolines.
-///
-/// # Safety
-/// The memory returned by [`ThunkAllocator::alloc_near`] must be
-/// read-write-executable.
-pub unsafe trait ThunkAllocator<T> {
-    /// The pointer type returned by the allocator.
-    type Ptr: AsPtr<T>;
-
-    /// Allocate space for a value of T in executable memory. All bytes of
-    /// allocated storage will be at most `displacement` bytes away from
-    /// `address`.
-    fn alloc_near(&self, address: usize, displacement: usize) -> Result<Self::Ptr, Error>;
-
-    /// Free a pointer returned by [`alloc_near`].
-    ///
-    /// # Safety
-    /// - The pointer must have been previously allocated through
-    ///   [`ThunkAllocator::alloc_near`].
-    unsafe fn free(&self, ptr: Self::Ptr);
-}
-
-unsafe impl<'a, T, A: ThunkAllocator<T>> ThunkAllocator<T> for &'a A {
-    type Ptr = A::Ptr;
-
-    fn alloc_near(&self, address: usize, displacement: usize) -> Result<Self::Ptr, Error> {
-        (**self).alloc_near(address, displacement)
+    unsafe fn alloc_within(
+        &self,
+        range: core::ops::Range<usize>,
+        layout: Layout,
+    ) -> Result<Self::Ptr, AllocError> {
+        unsafe { (**self).alloc_within(range, layout) }
     }
 
-    unsafe fn free(&self, ptr: Self::Ptr) {
-        (**self).free(ptr);
-    }
-}
-
-unsafe impl<T, A: ThunkAllocator<T>> ThunkAllocator<T> for crate::liballoc::boxed::Box<A> {
-    type Ptr = A::Ptr;
-
-    fn alloc_near(&self, address: usize, displacement: usize) -> Result<Self::Ptr, Error> {
-        (**self).alloc_near(address, displacement)
-    }
-
-    unsafe fn free(&self, ptr: Self::Ptr) {
-        (**self).free(ptr);
+    unsafe fn free(&self, ptr: Self::Ptr, layout: Layout) {
+        unsafe { (**self).free(ptr, layout) };
     }
 }
