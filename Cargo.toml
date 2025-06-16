@@ -6,7 +6,7 @@ edition = "2021"
 authors = ["William Tremblay <tremwil@users.noreply.github.com>"]
 keywords = ["detour", "hooking", "modding", "hacking", "instrumentation"]
 categories = ["security", "no-std"]
-license = "MIT"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/tremwil/anglerkit"
 
 [features]
