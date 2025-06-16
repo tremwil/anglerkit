@@ -16,7 +16,7 @@ const TALC_STATE_SIZE: usize = 1024;
 #[cfg(target_pointer_width = "32")]
 const TALC_STATE_SIZE: usize = 512;
 
-pub struct NearBlock<B: NearAllocator> {
+struct NearBlock<B: NearAllocator> {
     heap_span: Span,
     allocator: talc::Talc<talc::ErrOnOom>,
     alloc_count: u64,
@@ -80,7 +80,7 @@ impl<R: RawMutex, B: NearAllocator> BlockNearAlloc<R, B> {
         Err(())
     }
 
-    /// Frees all blocks that have zero active allocations.
+    /// Free all blocks that have zero active allocations.
     pub fn free_unused_blocks(&self) {
         let mut blocks = self.blocks.lock();
 
@@ -106,29 +106,25 @@ unsafe impl<R: RawMutex, B: NearAllocator> NearAllocator for BlockNearAlloc<R, B
         range: Range<usize>,
         layout: Layout,
     ) -> Result<NonNull<u8>, AllocError> {
-        let layout = layout.pad_to_align();
-
-        let aligned_end = range.end & (layout.align() - 1);
         let aligned_start = range
             .start
             .checked_next_multiple_of(layout.align())
             .ok_or(AllocError::NoSuitableRegion)?;
 
-        if aligned_end.saturating_sub(aligned_start) <= layout.size() {
+        if aligned_start.saturating_add(layout.size()) > range.end {
             return Err(AllocError::NoSuitableRegion);
         }
 
         let mut blocks = self.blocks.lock();
-        match unsafe {
-            Self::alloc_within_existing(&mut blocks, aligned_start..aligned_end, layout)
-        } {
+        match unsafe { Self::alloc_within_existing(&mut blocks, aligned_start..range.end, layout) }
+        {
             Ok(ptr) => return Ok(ptr),
             Err(_) => (),
         };
 
         // Make sure we'll have space for talc's metadata and at least the requested layout
         let new_block_layout = Layout::from_size_align(
-            self.min_block.size().max(layout.size() + TALC_STATE_SIZE),
+            self.min_block.size().max(layout.pad_to_align().size() + TALC_STATE_SIZE),
             self.min_block.align().max(layout.align()),
         )
         .map_err(|_| AllocError::UnsupportedLayout)?
@@ -160,8 +156,6 @@ unsafe impl<R: RawMutex, B: NearAllocator> NearAllocator for BlockNearAlloc<R, B
     }
 
     unsafe fn free(&self, ptr: NonNull<u8>, layout: Layout) {
-        let layout = layout.pad_to_align();
-
         let range = ptr.as_ptr().addr()..usize::MAX;
         let mut blocks = self.blocks.lock();
         let (_, block) = blocks.range_mut(range).next().unwrap();

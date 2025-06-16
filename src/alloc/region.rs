@@ -3,8 +3,7 @@ use std::sync::Once;
 
 use region::Allocation;
 
-use super::NearAllocator;
-use crate::alloc::{AllocError, AsMutPtr};
+use super::{AllocError, AsMutPtr, NearAllocator};
 
 /// Stateless [`NearAllocator`] implemented through the [`region`] crate.
 ///
