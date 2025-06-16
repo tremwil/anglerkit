@@ -10,8 +10,11 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/tremwil/anglerkit"
 
 [features]
-default = ["closure-ffi/bundled_jit_alloc", "dep:region"]
-no_std = ["closure-ffi/no_std"]
+default = ["std", "default_alloc"]
+std = ["dep:region"]
+block_alloc = ["dep:talc"]
+default_alloc = ["std", "block_alloc"]
+
 unstable = [
     "closure-ffi/unstable", 
     "closure-ffi/tuple_trait", 
@@ -23,7 +26,7 @@ unstable = [
 [dependencies]
 thiserror = "2.0"
 closure-ffi = { version = "2.4.0", default-features = false }
-talc = { version = "4.4.2", default-features = false, features = ["lock_api"] }
+talc = { version = "4.4.2", default-features = false, features = ["lock_api"], optional = true }
 lock_api = "0.4.13"
 clear-cache = "0.1.1"
 region = { version = "3.0.2", optional = true }
@@ -33,9 +36,6 @@ iced-x86 = "1.21"
 
 [target.'cfg(any(target_arch = "aarch64", target_arch = "arm"))'.dependencies]
 yaxpeax-arm = "0.3.1"
-
-[dev-dependencies]
-rand = "0.9.1"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
