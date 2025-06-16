@@ -1,7 +1,6 @@
-use core::sync::atomic::AtomicPtr;
+use core::sync::atomic::{AtomicPtr, Ordering};
 
 /// x86_64 indirect jump thunk.
-/// ```
 #[repr(C)]
 pub struct Thunk {
     /// Rip-relative jump to target code address.
@@ -21,6 +20,12 @@ impl Thunk {
             _pad: 0xCC,
             target: AtomicPtr::new(target as *mut _),
         }
+    }
+}
+
+unsafe impl super::traits::Thunk for Thunk {
+    fn target(&self) -> &AtomicPtr<u8> {
+        &self.target
     }
 }
 
