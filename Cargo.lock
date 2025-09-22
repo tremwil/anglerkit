@@ -52,11 +52,12 @@ dependencies = [
 
 [[package]]
 name = "closure-ffi"
-version = "2.4.0"
+version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3435cc338248c7314b5f3d8e74820c4c68d147c9766b93ab07fffc303c4a121"
+checksum = "624c588095e601dbed1160dcc90e55420577331356c7961ac84731083b54735c"
 dependencies = [
  "libc",
+ "rustflags",
 ]
 
 [[package]]
@@ -149,6 +150,12 @@ dependencies = [
  "mach2",
  "windows-sys",
 ]
+
+[[package]]
+name = "rustflags"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a39e0e9135d7a7208ee80aa4e3e4b88f0f5ad7be92153ed70686c38a03db2e63"
 
 [[package]]
 name = "scopeguard"
