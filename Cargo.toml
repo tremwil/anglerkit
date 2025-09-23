@@ -10,12 +10,12 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/tremwil/anglerkit"
 
 [features]
-default = ["std", "default_alloc"]
+default = ["std"]
 std = ["dep:region"]
 block_alloc = ["dep:talc"]
-default_alloc = ["std", "block_alloc"]
+default_alloc = ["std", "block_alloc", "dep:parking_lot"]
 
-unstable = [
+nightly = [
     "closure-ffi/unstable", 
     "closure-ffi/tuple_trait", 
     "closure-ffi/c_variadic",
@@ -28,6 +28,9 @@ thiserror = "2.0"
 closure-ffi = { version = "4.0.0", default-features = false }
 talc = { version = "4.4.2", default-features = false, features = ["lock_api"], optional = true }
 lock_api = "0.4.13"
+parking_lot = { version = "0.12", optional = true }
+spin = { version = "0.10", features = ["lock_api"] }
+
 clear-cache = "0.1.1"
 region = { version = "3.0.2", optional = true }
 

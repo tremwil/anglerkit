@@ -6,7 +6,10 @@ use core::{alloc::Layout, ops::Range, ptr::NonNull};
 mod region;
 
 pub mod arc;
+
+#[cfg(feature = "block_alloc")]
 pub mod block;
+
 pub mod boxed;
 
 /// Allocation error describing the different failure scenarios of a [`NearAllocator`].
@@ -113,6 +116,18 @@ pub unsafe trait NearAllocator {
     ///   [`alloc`](NearAllocator::alloc), [`alloc_within`](NearAllocator::alloc_within)
     ///   or [`alloc_near`](NearAllocator::alloc_near) with the same `layout`.
     unsafe fn free(&self, ptr: Self::Ptr, layout: Layout);
+
+    /// Free unused memory pools held by the allocator.
+    ///
+    /// For performance reasons, it is reasonnable for an implementation to keep virtual
+    /// memory blocks obtained from the OS even if they are currently unused, since
+    /// future [`alloc_near`](NearAllocator::alloc_near) or
+    /// [`alloc_within`](NearAllocator::alloc_within) calls are likely to require memory
+    /// around the same region. When this method is called, the allocator should free
+    /// these blocks.
+    ///
+    /// The default implementation does nothing.
+    fn garbage_collect(&self) {}
 }
 
 unsafe impl<A: NearAllocator> NearAllocator for &A {
@@ -174,7 +189,156 @@ unsafe impl<A: NearAllocator> NearAllocator for crate::liballoc::boxed::Box<A> {
 }
 
 /// The global [`NearAllocator`].
+///
+/// When the `default_alloc` feature is enabled, this is implemented using a static
+/// [`RegionNearAlloc`](region::RegionNearAlloc) wrapped in a
+/// [`BlockNearAlloc`](block::BlockNearAlloc). Otherwise, it defers to the
+/// [`NearAllocator`] instance provided to the [`global_near_alloc!`] macro.
 pub struct GlobalNearAlloc;
+
+#[cfg(feature = "default_alloc")]
+mod default_alloc {
+    use core::{alloc::Layout, ops::Range, ptr::NonNull};
+
+    use crate::alloc::{
+        block::BlockNearAlloc, region::RegionNearAlloc, AllocError, GlobalNearAlloc, NearAllocator,
+    };
+
+    #[cfg(feature = "default_alloc")]
+    type Mutex = parking_lot::RawMutex;
+    #[cfg(not(feature = "default_alloc"))]
+    type Mutex = spin::Mutex<()>;
+
+    static GLOBAL_NEAR_ALLOC: BlockNearAlloc<Mutex, RegionNearAlloc> =
+        BlockNearAlloc::new(RegionNearAlloc);
+
+    unsafe impl NearAllocator for GlobalNearAlloc {
+        type Ptr = *mut u8;
+
+        unsafe fn alloc(&self, layout: Layout) -> Result<Self::Ptr, AllocError> {
+            unsafe { GLOBAL_NEAR_ALLOC.alloc(layout) }
+        }
+
+        unsafe fn alloc_within(
+            &self,
+            range: Range<usize>,
+            layout: Layout,
+        ) -> Result<Self::Ptr, AllocError> {
+            unsafe { GLOBAL_NEAR_ALLOC.alloc_within(range, layout) }
+        }
+
+        unsafe fn alloc_near(
+            &self,
+            address: usize,
+            displacement: usize,
+            layout: Layout,
+        ) -> Result<Self::Ptr, AllocError> {
+            unsafe { GLOBAL_NEAR_ALLOC.alloc_near(address, displacement, layout) }
+        }
+
+        unsafe fn free(&self, ptr: Self::Ptr, layout: Layout) {
+            unsafe {
+                GLOBAL_NEAR_ALLOC.free(ptr, layout);
+            }
+        }
+
+        fn garbage_collect(&self) {
+            GLOBAL_NEAR_ALLOC.garbage_collect();
+        }
+    }
+}
+
+#[cfg(not(feature = "default_alloc"))]
+mod custom_alloc {
+    use core::{alloc::Layout, ops::Range};
+
+    use crate::alloc::{AllocError, GlobalNearAlloc, NearAllocator};
+
+    type DynNearAlloc = &'static (dyn NearAllocator<Ptr = *mut u8> + Sync);
+
+    extern "Rust" {
+        fn anglerkit_v0_global_near_alloc() -> DynNearAlloc;
+    }
+
+    fn global_alloc() -> DynNearAlloc {
+        unsafe { anglerkit_v0_global_near_alloc() }
+    }
+
+    unsafe impl NearAllocator for GlobalNearAlloc {
+        type Ptr = *mut u8;
+
+        unsafe fn alloc(&self, layout: Layout) -> Result<Self::Ptr, AllocError> {
+            unsafe { global_alloc().alloc(layout) }
+        }
+
+        unsafe fn alloc_within(
+            &self,
+            range: Range<usize>,
+            layout: Layout,
+        ) -> Result<Self::Ptr, AllocError> {
+            unsafe { global_alloc().alloc_within(range, layout) }
+        }
+
+        unsafe fn alloc_near(
+            &self,
+            address: usize,
+            displacement: usize,
+            layout: Layout,
+        ) -> Result<Self::Ptr, AllocError> {
+            unsafe { global_alloc().alloc_near(address, displacement, layout) }
+        }
+
+        unsafe fn free(&self, ptr: Self::Ptr, layout: Layout) {
+            unsafe { global_alloc().free(ptr, layout) }
+        }
+
+        fn garbage_collect(&self) {
+            global_alloc().garbage_collect()
+        }
+    }
+}
+
+/// Specify the [`NearAllocator<Ptr = *mut u8>`] implementation that [`GlobalNearAlloc`]
+/// will defer to.
+///
+/// The macro accepts a path to a static variable or an unsafe block resolving to a
+/// `&'static (dyn NearAllocator<Ptr = *mut u8> + Sync)`:
+///
+/// ```ignore
+/// static GLOBAL_NEAR: MyNearAlloc = MyNearAlloc::new();
+/// global_jit_alloc!(GLOBAL_NEAR);
+/// ```
+///
+/// ```ignore
+/// use std::sync::OnceLock;
+///
+/// global_near_alloc!(unsafe {
+///     static WRAPPED: OnceLock<MyNearAlloc> = OnceLock::new();
+///     WRAPPED.get_or_init(|| MyNearAlloc::new())
+/// });
+/// ```
+///
+/// # Safety
+/// The block form must be marked with `unsafe` as sometimes returning a different
+/// instance is unsound, and you are responsible to make sure this doesn't happen.
+#[cfg(any(doc, not(feature = "default_alloc")))]
+#[macro_export]
+macro_rules! global_near_alloc {
+    ($static_var:path) => {
+        #[unsafe(no_mangle)]
+        extern "Rust" fn anglerkit_v0_global_near_alloc(
+        ) -> &'static (dyn NearAllocator<Ptr = *mut u8> + Sync) {
+            $static_var
+        }
+    };
+    (unsafe $provider:block) => {
+        #[unsafe(no_mangle)]
+        extern "Rust" fn anglerkit_v0_global_near_alloc(
+        ) -> &'static (dyn NearAllocator<Ptr = *mut u8> + Sync) {
+            unsafe { $static_var }
+        }
+    };
+}
 
 enum AllocConstraint {
     None,

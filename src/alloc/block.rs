@@ -1,4 +1,5 @@
 use core::alloc::Layout;
+use core::mem::ManuallyDrop;
 use core::ops::Range;
 use core::ptr::NonNull;
 
@@ -52,6 +53,24 @@ impl<R: RawMutex, B: NearAllocator> Drop for BlockNearAlloc<R, B> {
 }
 
 impl<R: RawMutex, B: NearAllocator> BlockNearAlloc<R, B> {
+    pub const fn new(block_allocator: B) -> Self {
+        Self {
+            block_allocator,
+            blocks: Mutex::new(BTreeMap::new()),
+            min_block: const {
+                match Layout::from_size_align(0x10000, 1) {
+                    Ok(l) => l,
+                    Err(_) => panic!("invalid Layout"),
+                }
+            },
+        }
+    }
+
+    pub const fn with_min_block(mut self, min_block: Layout) -> Self {
+        self.min_block = min_block;
+        self
+    }
+
     /// Try to use an existing allocated block to allocate
     ///
     /// # Safety
@@ -78,23 +97,6 @@ impl<R: RawMutex, B: NearAllocator> BlockNearAlloc<R, B> {
             }
         }
         Err(())
-    }
-
-    /// Free all blocks that have zero active allocations.
-    pub fn free_unused_blocks(&self) {
-        let mut blocks = self.blocks.lock();
-
-        // Without nightly, this is the best way to do it without requiring
-        // <B as NearAllocator::Ptr>: Clone
-        let mut moved_blocks = BTreeMap::default();
-        core::mem::swap(&mut moved_blocks, &mut *blocks);
-        for (end, block) in moved_blocks {
-            if block.alloc_count == 0 {
-                unsafe { self.block_allocator.free(block.base, block.layout) };
-                continue;
-            }
-            blocks.insert(end, block);
-        }
     }
 }
 
@@ -167,5 +169,21 @@ unsafe impl<R: RawMutex, B: NearAllocator> NearAllocator for BlockNearAlloc<R, B
         // - user asserts that `ptr` was allocated with `layout`,
         // - we allocated ptr using `block.allocator`
         unsafe { block.allocator.free(ptr, layout) };
+    }
+
+    fn garbage_collect(&self) {
+        let mut blocks = self.blocks.lock();
+
+        // Without nightly, this is the best way to do it without requiring
+        // <B as NearAllocator::Ptr>: Clone
+        let mut moved_blocks = BTreeMap::default();
+        core::mem::swap(&mut moved_blocks, &mut *blocks);
+        for (end, block) in moved_blocks {
+            if block.alloc_count == 0 {
+                unsafe { self.block_allocator.free(block.base, block.layout) };
+                continue;
+            }
+            blocks.insert(end, block);
+        }
     }
 }
