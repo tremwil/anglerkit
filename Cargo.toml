@@ -2,7 +2,7 @@
 name = "anglerkit"
 version = "0.0.0"
 description = "In-development function hooking/detouring library"
-edition = "2021"
+edition = "2024"
 authors = ["William Tremblay <tremwil@users.noreply.github.com>"]
 keywords = ["detour", "hooking", "modding", "hacking", "instrumentation"]
 categories = ["security", "no-std"]
@@ -10,10 +10,15 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/tremwil/anglerkit"
 
 [features]
-default = ["std"]
+#default = ["std", "default_alloc"]
 std = ["dep:region"]
 block_alloc = ["dep:talc"]
-default_alloc = ["std", "block_alloc", "dep:parking_lot"]
+default_alloc = [
+    "std", 
+    "block_alloc", 
+    "dep:parking_lot",
+    "closure-ffi/default_jit_alloc"
+]
 
 nightly = [
     "closure-ffi/unstable", 
@@ -25,14 +30,21 @@ nightly = [
 
 [dependencies]
 thiserror = "2.0"
-closure-ffi = { version = "4.0.0", default-features = false }
+closure-ffi = { version = "4.1.0", default-features = false, features = ["global_jit_alloc"] }
 talc = { version = "4.4.2", default-features = false, features = ["lock_api"], optional = true }
 lock_api = "0.4.13"
 parking_lot = { version = "0.12", optional = true }
 spin = { version = "0.10", features = ["lock_api"] }
+bitflags = "2.9.4"
 
 clear-cache = "0.1.1"
 region = { version = "3.0.2", optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies.windows-sys]
+version = "0.61"
+features = [
+    "Win32_System_Memory","Win32_System_SystemInformation"
+]
 
 [target.'cfg(any(target_arch = "x86", target_arch = "x86_64"))'.dependencies]
 iced-x86 = "1.21"

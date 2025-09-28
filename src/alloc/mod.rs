@@ -201,7 +201,7 @@ mod default_alloc {
     use core::{alloc::Layout, ops::Range, ptr::NonNull};
 
     use crate::alloc::{
-        block::BlockNearAlloc, region::RegionNearAlloc, AllocError, GlobalNearAlloc, NearAllocator,
+        AllocError, GlobalNearAlloc, NearAllocator, block::BlockNearAlloc, region::RegionNearAlloc,
     };
 
     #[cfg(feature = "default_alloc")]
@@ -216,7 +216,7 @@ mod default_alloc {
         type Ptr = *mut u8;
 
         unsafe fn alloc(&self, layout: Layout) -> Result<Self::Ptr, AllocError> {
-            unsafe { GLOBAL_NEAR_ALLOC.alloc(layout) }
+            unsafe { GLOBAL_NEAR_ALLOC.alloc(layout).map(|p| p.as_ptr()) }
         }
 
         unsafe fn alloc_within(
@@ -224,7 +224,7 @@ mod default_alloc {
             range: Range<usize>,
             layout: Layout,
         ) -> Result<Self::Ptr, AllocError> {
-            unsafe { GLOBAL_NEAR_ALLOC.alloc_within(range, layout) }
+            unsafe { GLOBAL_NEAR_ALLOC.alloc_within(range, layout).map(|p| p.as_ptr()) }
         }
 
         unsafe fn alloc_near(
@@ -233,12 +233,16 @@ mod default_alloc {
             displacement: usize,
             layout: Layout,
         ) -> Result<Self::Ptr, AllocError> {
-            unsafe { GLOBAL_NEAR_ALLOC.alloc_near(address, displacement, layout) }
+            unsafe {
+                GLOBAL_NEAR_ALLOC
+                    .alloc_near(address, displacement, layout)
+                    .map(|p| p.as_ptr())
+            }
         }
 
         unsafe fn free(&self, ptr: Self::Ptr, layout: Layout) {
             unsafe {
-                GLOBAL_NEAR_ALLOC.free(ptr, layout);
+                GLOBAL_NEAR_ALLOC.free(NonNull::new_unchecked(ptr), layout);
             }
         }
 
@@ -256,7 +260,7 @@ mod custom_alloc {
 
     type DynNearAlloc = &'static (dyn NearAllocator<Ptr = *mut u8> + Sync);
 
-    extern "Rust" {
+    unsafe extern "Rust" {
         fn anglerkit_v0_global_near_alloc() -> DynNearAlloc;
     }
 
@@ -326,15 +330,15 @@ mod custom_alloc {
 macro_rules! global_near_alloc {
     ($static_var:path) => {
         #[unsafe(no_mangle)]
-        extern "Rust" fn anglerkit_v0_global_near_alloc(
-        ) -> &'static (dyn NearAllocator<Ptr = *mut u8> + Sync) {
-            $static_var
+        extern "Rust" fn anglerkit_v0_global_near_alloc()
+        -> &'static (dyn NearAllocator<Ptr = *mut u8> + Sync) {
+            &$static_var
         }
     };
     (unsafe $provider:block) => {
         #[unsafe(no_mangle)]
-        extern "Rust" fn anglerkit_v0_global_near_alloc(
-        ) -> &'static (dyn NearAllocator<Ptr = *mut u8> + Sync) {
+        extern "Rust" fn anglerkit_v0_global_near_alloc()
+        -> &'static (dyn NearAllocator<Ptr = *mut u8> + Sync) {
             unsafe { $static_var }
         }
     };

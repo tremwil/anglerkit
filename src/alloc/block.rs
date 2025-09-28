@@ -1,5 +1,4 @@
 use core::alloc::Layout;
-use core::mem::ManuallyDrop;
 use core::ops::Range;
 use core::ptr::NonNull;
 

@@ -1,15 +1,12 @@
-#![cfg_attr(not(feature = "std"), no_std)]
-#![cfg_attr(docsrs, feature(doc_cfg))]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![no_std]
+#![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
+#![cfg_attr(feature = "nightly", feature(unboxed_closures, fn_traits))]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-#[cfg(not(feature = "std"))]
-extern crate alloc as _liballoc;
-#[cfg(feature = "std")]
-use std as liballoc;
+extern crate alloc as liballoc;
 
-#[cfg(not(feature = "std"))]
-use _liballoc as liballoc;
+#[cfg(feature = "std")]
+extern crate std;
 
 pub mod traits;
 
@@ -17,4 +14,11 @@ pub mod trampoline;
 
 pub mod alloc;
 
-pub mod vtable;
+pub mod os;
+
+pub mod hook;
+
+pub mod error;
+
+#[doc(inline)]
+pub use error::{Error, Result};

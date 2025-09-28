@@ -26,8 +26,12 @@ fn allocation_granularity() -> usize {
             let alloc_gran = region::page::size();
 
             #[cfg(windows)]
-            // TODO: use GetSystemInfo
-            let alloc_gran = 1 << 16;
+            let alloc_gran = {
+                use windows_sys::Win32::System::SystemInformation::{GetSystemInfo, SYSTEM_INFO};
+                let mut sysinfo = SYSTEM_INFO::default();
+                GetSystemInfo(&mut sysinfo);
+                sysinfo.dwAllocationGranularity as usize
+            };
 
             assert!(alloc_gran.is_power_of_two());
             ALLOC_GRAN = alloc_gran;
