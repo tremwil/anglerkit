@@ -161,58 +161,33 @@ mod windows {
                 System::Diagnostics::Debug::{
                     AddVectoredExceptionHandler, CONTEXT, EXCEPTION_CONTINUE_EXECUTION,
                     EXCEPTION_CONTINUE_SEARCH, EXCEPTION_POINTERS, RemoveVectoredExceptionHandler,
+                    RtlCaptureContext,
                 },
             };
 
-            thread_local! {
-                static CONTEXT_STACK: RefCell<Vec<CONTEXT>> = const { RefCell::new(Vec::new()) };
+            #[derive(Default)]
+            struct ExFrame {
+                ctx: CONTEXT,
+                had_exception: bool,
             }
 
-            // use a breakpoint at a known address to trigger the VEH and save the context
-            #[unsafe(naked)]
-            unsafe extern "C" fn veh_setjmp() -> bool {
-                #[cfg(target_arch = "x86")]
-                core::arch::naked_asm!("int3");
-                #[cfg(target_arch = "aarch64")]
-                core::arch::naked_asm!("brk");
+            thread_local! {
+                static CONTEXT_STACK: RefCell<Vec<ExFrame>> = const { RefCell::new(Vec::new()) };
             }
 
             unsafe extern "system" fn veh(ex_ptr: *mut EXCEPTION_POINTERS) -> i32 {
                 let ctx = unsafe { &mut *(*ex_ptr).ContextRecord };
-                let ex_info = unsafe { &*(*ex_ptr).ExceptionRecord };
 
-                // veh_setjmp was called. Return from it and save the context
-                if ex_info.ExceptionAddress.addr() == veh_setjmp as usize {
-                    #[cfg(target_arch = "x86")]
-                    {
-                        let return_address = unsafe { *(ctx.Esp as *const u32) };
-                        ctx.Esp += 4;
-                        ctx.Eip = return_address;
-                        ctx.Eax = 0;
-                    }
-                    #[cfg(target_arch = "aarch64")]
-                    {
-                        ctx.Pc = ctx.Anonymous.X30;
-                        ctx.Anonymous.X0 = 0;
-                    }
-                    CONTEXT_STACK.with_borrow_mut(|stack| stack.push(*ctx));
-                    return EXCEPTION_CONTINUE_EXECUTION;
-                }
-                CONTEXT_STACK.with_borrow(|stack| {
-                    let Some(saved_ctx) = stack.last()
+                CONTEXT_STACK.with_borrow_mut(|stack| {
+                    let Some(frame) = stack.last_mut()
                     else {
                         // the veh was likely triggered from another thread due to some unrelated
                         // exception. Forward to the next handler
                         return EXCEPTION_CONTINUE_SEARCH;
                     };
-                    // Restore the context while setting the return value of veh_setjmp to true
-                    *ctx = *saved_ctx;
-                    #[cfg(target_arch = "x86")]
-                    let ret = &mut ctx.Eax;
-                    #[cfg(target_arch = "aarch64")]
-                    let ret = &mut ctx.Anonymous.X0;
-                    *ret = 1;
-
+                    // Notify of the exception and restore the context to the savepoint
+                    frame.had_exception = true;
+                    *ctx = frame.ctx;
                     EXCEPTION_CONTINUE_EXECUTION
                 })
             }
@@ -225,20 +200,35 @@ mod windows {
                 )
             }
 
+            // push an empty context. This has to be done before RtlCaptureContext
+            CONTEXT_STACK.with_borrow_mut(|stack| stack.push(ExFrame::default()));
+
             // Use a drop guard to make sure that critical cleanup is performed even if a panic from
             // `fun` is not caught by the veh
             struct VehDropGuard(*mut core::ffi::c_void);
             impl Drop for VehDropGuard {
                 fn drop(&mut self) {
                     unsafe { RemoveVectoredExceptionHandler(self.0) };
-                    CONTEXT_STACK.with_borrow_mut(|s| {
-                        s.pop().expect("try_except_raw context stack underflow")
+                    CONTEXT_STACK.with_borrow_mut(|stack| {
+                        stack.pop().expect("try_except_raw context stack underflow")
                     });
                 }
             }
             let drop_guard = VehDropGuard(veh_handle);
 
-            let had_exception = unsafe { veh_setjmp() };
+            // capture the current context. If an exception occurs, the VEH will restore the
+            // thread context to this point and we will be able to check had_exception.
+            let mut context = CONTEXT::default();
+            unsafe { RtlCaptureContext(&mut context) };
+
+            let had_exception = CONTEXT_STACK.with_borrow_mut(|stack| {
+                let frame = stack.last_mut().expect("try_except_raw context stack is empty");
+                if !frame.had_exception {
+                    frame.ctx = context;
+                }
+                frame.had_exception
+            });
+
             if !had_exception {
                 unsafe { fun(ctx) };
             }
@@ -279,6 +269,7 @@ mod unix {
                 }
             }
 
+            // Todo: Safely manage `sigaction` race conditions
             static REGISTER_HANDLER: Once = Once::new();
             REGISTER_HANDLER.call_once(|| {
                 let act = sigaction {
@@ -307,12 +298,13 @@ mod unix {
                     CONTEXT_STACK.with_borrow_mut(|stack| stack.pop().unwrap());
                 }
             }
-            let _drop_guard = DropGuard;
+            let drop_guard = DropGuard;
 
             if had_exception == 0 {
                 unsafe { fun(ctx) };
             }
 
+            drop(drop_guard);
             return had_exception == 0;
         }
     }
