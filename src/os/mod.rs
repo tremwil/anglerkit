@@ -1,5 +1,6 @@
 use crate::liballoc::{borrow::Cow, string::String};
 
+mod exception;
 pub mod memory;
 
 /// An error from the operating system represented as a human-readable string.
@@ -29,7 +30,7 @@ impl core::error::Error for OsErr {}
 
 /// Dyn-compatible trait used to provide implementations of OS functions required by the
 /// crate in a cross-platform and `no_std` friendly manner.
-pub trait OsFunctions: memory::MemFunctions {}
+pub trait OsFunctions: memory::MemFunctions + exception::ExceptionFunctions {}
 
 /// Marker type which defers to the current [`OsFunctions`] implementation used by
 /// anglerkit.

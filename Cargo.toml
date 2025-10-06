@@ -10,7 +10,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/tremwil/anglerkit"
 
 [features]
-#default = ["std", "default_alloc"]
+default = ["std", "default_alloc"]
 std = ["dep:region"]
 block_alloc = ["dep:talc"]
 default_alloc = [
@@ -40,10 +40,16 @@ bitflags = "2.9.4"
 clear-cache = "0.1.1"
 region = { version = "3.0.2", optional = true }
 
+[target.'cfg(target_env = "msvc")'.dependencies]
+microseh = { version = "1.1.2", default-features = false }
+
 [target.'cfg(target_os = "windows")'.dependencies.windows-sys]
 version = "0.61"
 features = [
-    "Win32_System_Memory","Win32_System_SystemInformation"
+    "Win32_System_Kernel",
+    "Win32_System_Memory",
+    "Win32_System_SystemInformation",
+    "Win32_System_Diagnostics_Debug"    
 ]
 
 [target.'cfg(any(target_arch = "x86", target_arch = "x86_64"))'.dependencies]
