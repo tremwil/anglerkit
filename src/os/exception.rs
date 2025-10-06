@@ -138,7 +138,7 @@ mod windows {
             unsafe { try_except_seh(&CCThunkData { ctx, fun }, thunk) }
         }
 
-        // On other envs, use a diy setjmp based on `AddVectoredExceptionHandler` and a thread
+        // On other envs, use a DIY setjmp based on `AddVectoredExceptionHandler` and a thread
         // local stack of CONTEXTs
         #[cfg(not(any(target_env = "msvc", target_arch = "x86_64")))]
         unsafe fn try_except_raw(&self, ctx: *mut (), fun: unsafe fn(*mut ())) -> bool {
@@ -156,48 +156,50 @@ mod windows {
                 static CONTEXT_STACK: RefCell<Vec<CONTEXT>> = const { RefCell::new(Vec::new()) };
             }
 
+            // use a breakpoint at a known address to trigger the VEH and save the context
             #[unsafe(naked)]
             unsafe extern "C" fn veh_setjmp() -> bool {
                 #[cfg(target_arch = "x86")]
-                core::arch::naked_asm!("int3", "ret");
+                core::arch::naked_asm!("int3");
                 #[cfg(target_arch = "aarch64")]
-                core::arch::naked_asm!("brk", "ret");
+                core::arch::naked_asm!("brk");
             }
 
             unsafe extern "system" fn veh(ex_ptr: *mut EXCEPTION_POINTERS) -> i32 {
                 let ctx = unsafe { &mut *(*ex_ptr).ContextRecord };
                 let ex_info = unsafe { &*(*ex_ptr).ExceptionRecord };
 
-                // veh_setjmp was called. Skip the breakpoint and save the context,
-                // returning false
+                // veh_setjmp was called. Return from it and save the context
                 if ex_info.ExceptionAddress.addr() == veh_setjmp as usize {
                     #[cfg(target_arch = "x86")]
                     {
-                        ctx.Eip += 1;
+                        let return_address = unsafe { *(ctx.Esp as *const u32) };
+                        ctx.Esp += 4;
+                        ctx.Eip = return_address;
                         ctx.Eax = 0;
                     }
                     #[cfg(target_arch = "aarch64")]
                     {
-                        ctx.Pc += 4;
+                        ctx.Pc = ctx.Anonymous.X30;
                         ctx.Anonymous.X0 = 0;
                     }
                     CONTEXT_STACK.with_borrow_mut(|stack| stack.push(*ctx));
                     return EXCEPTION_CONTINUE_EXECUTION;
                 }
-                CONTEXT_STACK.with_borrow_mut(|stack| {
-                    let Some(saved_ctx) = stack.last_mut()
+                CONTEXT_STACK.with_borrow(|stack| {
+                    let Some(saved_ctx) = stack.last()
                     else {
                         // the veh was likely triggered from another thread due to some unrelated
                         // exception. Forward to the next handler
                         return EXCEPTION_CONTINUE_SEARCH;
                     };
                     // Restore the context while setting the return value of veh_setjmp to true
-                    #[cfg(target_arch = "x86")]
-                    let ret = &mut saved_ctx.Eax;
-                    #[cfg(target_arch = "aarch64")]
-                    let ret = saved_ctx.Anonymous.X0;
-                    *ret = 1;
                     *ctx = *saved_ctx;
+                    #[cfg(target_arch = "x86")]
+                    let ret = &mut ctx.Eax;
+                    #[cfg(target_arch = "aarch64")]
+                    let ret = &mut ctx.Anonymous.X0;
+                    *ret = 1;
 
                     EXCEPTION_CONTINUE_EXECUTION
                 })
@@ -211,21 +213,16 @@ mod windows {
                 )
             }
 
-            let second_return = unsafe { veh_setjmp() };
-            if !second_return {
+            let had_exception = unsafe { veh_setjmp() };
+            if !had_exception {
                 unsafe { fun(ctx) };
             }
 
             unsafe { RemoveVectoredExceptionHandler(veh_handle) };
+            CONTEXT_STACK
+                .with_borrow_mut(|s| s.pop().expect("try_except_raw context stack underflow"));
 
-            // For some reason (probably missing the returns_twice llvm attr on veh_setjmp),
-            // the codegen is broken and second_return always evaluates to false (despite the code
-            // in the if running once). So we read it from the context instead
-            let ctx = CONTEXT_STACK.with_borrow_mut(|stack| stack.pop().unwrap());
-            #[cfg(target_arch = "x86")]
-            return ctx.Eax == 0;
-            #[cfg(target_arch = "aarch64")]
-            return ctx.Anonymous.X0 == 0;
+            return !had_exception;
         }
     }
 
@@ -235,7 +232,7 @@ mod windows {
 
         #[test]
         #[cfg(any(target_os = "windows"))]
-        fn test_seh() {
+        fn test_catches_null_write() {
             let result = OsImpl.try_except(|| unsafe {
                 std::ptr::null_mut::<u8>().write_volatile(0);
             });

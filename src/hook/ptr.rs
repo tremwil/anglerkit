@@ -404,7 +404,7 @@ mod tests {
     fn test_non_toggleable_hook_by_sig() {
         let builder = Builder::new()
             .target_fn((&raw const VMT_OR_IAT[0]).cast_mut())
-            .hook(move |n| 2 * n);
+            .hook_ctx(|ctx| move |n| 2 * n + unsafe { ctx.original_ptr()(n) });
 
         let _hook0 = unsafe { builder.install() }.unwrap();
         assert_eq!(unsafe { VMT_OR_IAT[0](100) }, 200);
