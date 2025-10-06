@@ -1,6 +1,6 @@
 use crate::liballoc::{borrow::Cow, string::String};
 
-mod exception;
+pub mod exception;
 pub mod memory;
 
 /// An error from the operating system represented as a human-readable string.

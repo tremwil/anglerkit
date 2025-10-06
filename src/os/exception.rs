@@ -12,10 +12,15 @@ pub trait ExceptionFunctions {
     /// closures to be invoked without unnecessary boxing. For a safe, ergonomic API
     /// consider using [`ExceptionFunctionsEx::try_except`].
     ///
-    /// # Panics
+    /// # Panic Propagation
     /// Depending on the Rust panic implementation on the current platform, whenever
-    /// `fun` panics the method may either panic normally or swallow the panic and
-    /// report it as an exception.
+    /// `fun` panics any of these (safe) behaviors may be observed:
+    /// - The panic is propagated normally.
+    /// - The panic is swallowed and try_except_raw returns `false` (`catch_unwind`-like
+    ///   behavior).
+    /// - The process aborts.
+    ///
+    /// As such, `fun` should not panic or attempt to catch panics.
     ///
     /// # Safety
     /// - Unsafe function `fun` must be valid to call with `ctx`.
@@ -37,10 +42,15 @@ pub trait ExceptionFunctionsEx: ExceptionFunctions {
     /// was interrupted due to an exception (e.g. `EXCEPTION_ACCESS_VIOLATION` or
     /// `SIGBUS`).
     ///
-    /// # Panics
+    /// # Panic Propagation
     /// Depending on the Rust panic implementation on the current platform, whenever
-    /// `fun` panics the method may either panic normally or swallow the panic and
-    /// report it as an exception.
+    /// `fun` panics any of these (safe) behaviors may be observed:
+    /// - The panic is propagated normally.
+    /// - The panic is swallowed and try_except_raw returns `false` (`catch_unwind`-like
+    ///   behavior).
+    /// - The process aborts.
+    ///
+    /// As such, `fun` should not panic or attempt to catch panics.
     ///
     /// # Safety
     /// Due to platform and architecture differences, this method only catches
@@ -91,6 +101,8 @@ mod windows {
         unsafe fn try_except_raw(&self, ctx: *mut (), fun: unsafe fn(*mut ())) -> bool {
             use core::arch::naked_asm;
 
+            use windows_sys::Win32::System::Diagnostics::Debug::EXCEPTION_EXECUTE_HANDLER;
+
             struct CCThunkData {
                 ctx: *mut (),
                 fun: unsafe fn(*mut ()),
@@ -100,7 +112,7 @@ mod windows {
             #[unsafe(link_section = ".text")]
             unsafe extern "C" fn try_except_seh(
                 ctx: &CCThunkData,
-                fun: unsafe extern "C-unwind" fn(&CCThunkData),
+                fun: unsafe extern "C" fn(&CCThunkData),
             ) -> bool {
                 naked_asm!(
                     ".seh_proc {fct_name}",
@@ -132,7 +144,7 @@ mod windows {
                 );
             }
 
-            unsafe extern "C-unwind" fn thunk(ctx: &CCThunkData) {
+            unsafe extern "C" fn thunk(ctx: &CCThunkData) {
                 unsafe { (ctx.fun)(ctx.ctx) }
             }
             unsafe { try_except_seh(&CCThunkData { ctx, fun }, thunk) }
@@ -213,30 +225,49 @@ mod windows {
                 )
             }
 
+            // Use a drop guard to make sure that critical cleanup is performed even if a panic from
+            // `fun` is not caught by the veh
+            struct VehDropGuard(*mut core::ffi::c_void);
+            impl Drop for VehDropGuard {
+                fn drop(&mut self) {
+                    unsafe { RemoveVectoredExceptionHandler(self.0) };
+                    CONTEXT_STACK.with_borrow_mut(|s| {
+                        s.pop().expect("try_except_raw context stack underflow")
+                    });
+                }
+            }
+            let drop_guard = VehDropGuard(veh_handle);
+
             let had_exception = unsafe { veh_setjmp() };
             if !had_exception {
                 unsafe { fun(ctx) };
             }
 
-            unsafe { RemoveVectoredExceptionHandler(veh_handle) };
-            CONTEXT_STACK
-                .with_borrow_mut(|s| s.pop().expect("try_except_raw context stack underflow"));
-
+            drop(drop_guard);
             return !had_exception;
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "std"))]
     mod tests {
         use crate::os::{OsImpl, exception::ExceptionFunctionsEx};
 
         #[test]
-        #[cfg(any(target_os = "windows"))]
-        fn test_catches_null_write() {
+        fn test_exception() {
             let result = OsImpl.try_except(|| unsafe {
+                std::println!("before exception");
                 std::ptr::null_mut::<u8>().write_volatile(0);
+                std::println!("after exception");
             });
-            assert!(result.is_err())
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn test_no_exception() {
+            let result = OsImpl.try_except(|| {
+                std::println!("no exception");
+            });
+            assert!(result.is_ok());
         }
     }
 }
