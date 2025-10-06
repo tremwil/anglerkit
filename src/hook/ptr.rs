@@ -404,10 +404,10 @@ mod tests {
     fn test_non_toggleable_hook_by_sig() {
         let builder = Builder::new()
             .target_fn((&raw const VMT_OR_IAT[0]).cast_mut())
-            .hook_ctx(|ctx| move |n| 2 * n + unsafe { ctx.original_ptr()(n) });
+            .hook_ctx(|ctx| move |n| n + unsafe { ctx.original_ptr()(n) });
 
         let _hook0 = unsafe { builder.install() }.unwrap();
-        assert_eq!(unsafe { VMT_OR_IAT[0](100) }, 200);
+        assert_eq!(unsafe { VMT_OR_IAT[0](100) }, 323);
     }
 
     #[test]
@@ -433,6 +433,6 @@ mod tests {
         assert_eq!(unsafe { VMT_OR_IAT[1](50) }, 1100);
 
         drop(hook1); // should disable
-        assert_eq!(unsafe { VMT_OR_IAT[1](200) }, 1200);
+        assert_eq!(unsafe { VMT_OR_IAT[1](200) }, 400);
     }
 }
