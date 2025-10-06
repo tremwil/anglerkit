@@ -164,7 +164,7 @@ mod std_impl {
                 Protection::READ_WRITE => region::Protection::READ_WRITE,
                 Protection::READ_WRITE_EXECUTE => region::Protection::READ_WRITE_EXECUTE,
                 Protection::WRITE_EXECUTE => region::Protection::WRITE_EXECUTE,
-                _ => unreachable!("{value}"),
+                _ => unreachable!("{value:?}"),
             }
         }
     }
