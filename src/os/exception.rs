@@ -85,7 +85,7 @@ pub trait ExceptionFunctionsEx: ExceptionFunctions {
 
 impl<T: ExceptionFunctions + ?Sized> ExceptionFunctionsEx for T {}
 
-#[cfg(all(feature = "std", target_os = "windows"))]
+#[cfg(all(feature = "std", windows))]
 mod windows {
     use crate::os::{OsImpl, exception::ExceptionFunctions};
 
@@ -247,27 +247,117 @@ mod windows {
             return !had_exception;
         }
     }
+}
 
-    #[cfg(all(test, feature = "std"))]
-    mod tests {
-        use crate::os::{OsImpl, exception::ExceptionFunctionsEx};
+#[cfg(all(feature = "std", unix))]
+mod unix {
+    use core::{
+        cell::RefCell,
+        ffi::c_int,
+        mem::{self, MaybeUninit},
+    };
+    use std::{sync::Once, vec::Vec};
 
-        #[test]
-        fn test_exception() {
-            let result = OsImpl.try_except(|| unsafe {
-                std::println!("before exception");
-                std::ptr::null_mut::<u8>().write_volatile(0);
-                std::println!("after exception");
+    use libc::{
+        SA_SIGINFO, SIGBUS, SIGFPE, SIGILL, SIGSEGV, SIGTRAP, getcontext, setcontext, sigaction,
+        siginfo_t, sigset_t, ucontext_t,
+    };
+
+    use crate::os::{OsImpl, exception::ExceptionFunctions};
+
+    impl ExceptionFunctions for OsImpl {
+        unsafe fn try_except_raw(&self, ctx: *mut (), fun: unsafe fn(*mut ())) -> bool {
+            struct ExFrame {
+                uc: ucontext_t,
+                had_exception: bool,
+            }
+
+            std::thread_local! {
+                static CONTEXT_STACK: RefCell<Vec<ExFrame>> = const { RefCell::new(Vec::new()) };
+            }
+
+            const HARDWARE_SIGNALS: &[i32] = &[SIGILL, SIGFPE, SIGSEGV, SIGBUS, SIGTRAP];
+
+            unsafe extern "system" fn sa_handler(_signal: c_int) {
+                let uctx = CONTEXT_STACK.with_borrow_mut(|stack| {
+                    let frame = stack.last_mut().unwrap();
+                    frame.had_exception = true;
+                    frame.uc
+                });
+                unsafe { setcontext(&uctx) };
+            }
+
+            static REGISTER_HANDLER: Once = Once::new();
+            REGISTER_HANDLER.call_once(|| {
+                let act = sigaction {
+                    sa_sigaction: sa_handler as usize,
+                    sa_mask: unsafe { mem::zeroed() },
+                    sa_flags: 0,
+                    sa_restorer: None,
+                };
+                for &s in HARDWARE_SIGNALS {
+                    let mut oldact = MaybeUninit::uninit();
+                    if unsafe { sigaction(s, &act, oldact.as_mut_ptr()) } != 0 {
+                        panic!("sigaction failed: {}", std::io::Error::last_os_error());
+                    }
+                }
             });
-            assert!(result.is_err());
-        }
 
-        #[test]
-        fn test_no_exception() {
-            let result = OsImpl.try_except(|| {
-                std::println!("no exception");
+            CONTEXT_STACK.with_borrow_mut(|stack| {
+                stack.push(ExFrame {
+                    uc: unsafe { mem::zeroed() },
+                    had_exception: false,
+                })
             });
-            assert!(result.is_ok());
+
+            struct DropGuard;
+            impl Drop for DropGuard {
+                fn drop(&mut self) {
+                    CONTEXT_STACK.with_borrow_mut(|stack| stack.pop().unwrap());
+                }
+            }
+            let _drop_guard = DropGuard;
+
+            let mut uc = MaybeUninit::uninit();
+            if unsafe { getcontext(uc.as_mut_ptr()) } != 0 {
+                panic!("getcontext failed: {}", std::io::Error::last_os_error());
+            }
+
+            let had_exception = CONTEXT_STACK.with_borrow_mut(|stack| {
+                let frame = stack.last_mut().unwrap();
+                if !frame.had_exception {
+                    frame.uc = unsafe { uc.assume_init() }
+                }
+                frame.had_exception
+            });
+            if !had_exception {
+                unsafe { fun(ctx) }
+            }
+
+            return !had_exception;
         }
+    }
+}
+
+#[cfg(all(test, feature = "std"))]
+mod tests {
+    use crate::os::{OsImpl, exception::ExceptionFunctionsEx};
+
+    #[test]
+    fn test_exception() {
+        let result = OsImpl.try_except(|| unsafe {
+            std::println!("before exception");
+            std::ptr::null_mut::<u8>().write_volatile(0);
+            std::println!("after exception");
+        });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_no_exception() {
+        let result = OsImpl.try_except(|| {
+            std::println!("no exception");
+        });
+        assert!(result.is_ok());
     }
 }
