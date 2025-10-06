@@ -11,7 +11,12 @@ repository = "https://github.com/tremwil/anglerkit"
 
 [features]
 default = ["std", "default_alloc"]
-std = ["dep:region"]
+std = [
+    "dep:region",
+    "dep:microseh",
+    "dep:libc",
+    "dep:setjmp"
+]
 block_alloc = ["dep:talc"]
 default_alloc = [
     "std", 
@@ -30,7 +35,7 @@ nightly = [
 
 [dependencies]
 thiserror = "2.0"
-closure-ffi = { version = "4.1.0", default-features = false, features = ["global_jit_alloc"] }
+closure-ffi = { version = "4.1.0", default-features = false, features = ["global_jit_alloc", "proc_macros"] }
 talc = { version = "4.4.2", default-features = false, features = ["lock_api"], optional = true }
 lock_api = "0.4.13"
 parking_lot = { version = "0.12", optional = true }
@@ -41,11 +46,11 @@ clear-cache = "0.1.1"
 region = { version = "3.0.2", optional = true }
 
 [target.'cfg(target_env = "msvc")'.dependencies]
-microseh = { version = "1.1.2", default-features = false }
+microseh = { version = "1.1.2", default-features = false, optional = true}
 
 [target.'cfg(unix)'.dependencies]
-libc = {version = "0.2", default-features = false}
-setjmp = "0.1.4"
+libc = { version = "0.2", default-features = false, optional = true }
+setjmp = { version = "0.1.4", optional = true }
 
 [target.'cfg(windows)'.dependencies.windows-sys]
 version = "0.61"

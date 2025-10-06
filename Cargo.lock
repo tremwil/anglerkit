@@ -185,10 +185,22 @@ version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5445824802a275a1aa54c19494cd2cfcc95b1ec8bf761c7384fb95f7f76b7790"
 dependencies = [
+ "closure-ffi-proc-macros",
  "jit-allocator2",
  "libc",
  "rustflags",
  "spin",
+]
+
+[[package]]
+name = "closure-ffi-proc-macros"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd9785631392931a8b989766f00d50f6b72495a6f0a9179dbdb4a6ed0361039e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

@@ -258,33 +258,25 @@ mod unix {
     };
     use std::{sync::Once, vec::Vec};
 
-    use libc::{
-        SA_SIGINFO, SIGBUS, SIGFPE, SIGILL, SIGSEGV, SIGTRAP, getcontext, setcontext, sigaction,
-        siginfo_t, sigset_t, ucontext_t,
-    };
+    use libc::{SIGBUS, SIGFPE, SIGILL, SIGSEGV, SIGTRAP, sigaction};
+    use setjmp::{jmp_buf, siglongjmp, sigsetjmp};
 
     use crate::os::{OsImpl, exception::ExceptionFunctions};
 
     impl ExceptionFunctions for OsImpl {
         unsafe fn try_except_raw(&self, ctx: *mut (), fun: unsafe fn(*mut ())) -> bool {
-            struct ExFrame {
-                uc: ucontext_t,
-                had_exception: bool,
-            }
-
             std::thread_local! {
-                static CONTEXT_STACK: RefCell<Vec<ExFrame>> = const { RefCell::new(Vec::new()) };
+                static CONTEXT_STACK: RefCell<Vec<jmp_buf>> = const { RefCell::new(Vec::new()) };
             }
 
             const HARDWARE_SIGNALS: &[i32] = &[SIGILL, SIGFPE, SIGSEGV, SIGBUS, SIGTRAP];
 
             unsafe extern "system" fn sa_handler(_signal: c_int) {
-                let uctx = CONTEXT_STACK.with_borrow_mut(|stack| {
-                    let frame = stack.last_mut().unwrap();
-                    frame.had_exception = true;
-                    frame.uc
-                });
-                unsafe { setcontext(&uctx) };
+                if let Some(mut jmp_buf) =
+                    CONTEXT_STACK.with_borrow_mut(|stack| stack.last_mut().copied())
+                {
+                    unsafe { siglongjmp(&mut jmp_buf, 1) };
+                }
             }
 
             static REGISTER_HANDLER: Once = Once::new();
@@ -303,13 +295,12 @@ mod unix {
                 }
             });
 
-            CONTEXT_STACK.with_borrow_mut(|stack| {
-                stack.push(ExFrame {
-                    uc: unsafe { mem::zeroed() },
-                    had_exception: false,
-                })
-            });
+            let mut env = unsafe { mem::zeroed() };
+            let had_exception = unsafe { sigsetjmp(&mut env, 1) };
 
+            if had_exception == 0 {
+                CONTEXT_STACK.with_borrow_mut(|stack| stack.push(env));
+            }
             struct DropGuard;
             impl Drop for DropGuard {
                 fn drop(&mut self) {
@@ -318,23 +309,11 @@ mod unix {
             }
             let _drop_guard = DropGuard;
 
-            let mut uc = MaybeUninit::uninit();
-            if unsafe { getcontext(uc.as_mut_ptr()) } != 0 {
-                panic!("getcontext failed: {}", std::io::Error::last_os_error());
+            if had_exception == 0 {
+                unsafe { fun(ctx) };
             }
 
-            let had_exception = CONTEXT_STACK.with_borrow_mut(|stack| {
-                let frame = stack.last_mut().unwrap();
-                if !frame.had_exception {
-                    frame.uc = unsafe { uc.assume_init() }
-                }
-                frame.had_exception
-            });
-            if !had_exception {
-                unsafe { fun(ctx) }
-            }
-
-            return !had_exception;
+            return had_exception == 0;
         }
     }
 }
