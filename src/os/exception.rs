@@ -239,22 +239,33 @@ mod windows {
     }
 }
 
+// On unix systems, implementing this is inherently problematic due to the lack of an
+// API for registering and unregistering hardware exception handlers from multiple
+// non-coordinating libraries/threads without incurring race conditions.
+//
+// As such, the implementation is feature-gated and by default we don't provide
+// thread safety guarantees when hooking over non-RWX memory.
+//
+// When the feature is set, the implementation uses a signal handler configured to catch
+// hardware exceptions which context switches back to the function using `siglongjmp`.
+// This is fine as long as no foreign code register the same signal handlers.
 #[cfg(all(feature = "std", unix))]
 mod unix {
-    use core::{
-        cell::RefCell,
-        ffi::c_int,
-        mem::{self, MaybeUninit},
-    };
-    use std::{sync::Once, vec::Vec};
-
-    use libc::{SIGBUS, SIGFPE, SIGILL, SIGSEGV, SIGTRAP, sigaction};
-    use setjmp::{jmp_buf, siglongjmp, sigsetjmp};
-
     use crate::os::{OsImpl, exception::ExceptionFunctions};
 
     impl ExceptionFunctions for OsImpl {
+        #[cfg(feature = "unix_try_except")]
         unsafe fn try_except_raw(&self, ctx: *mut (), fun: unsafe fn(*mut ())) -> bool {
+            use core::{
+                cell::RefCell,
+                ffi::c_int,
+                mem::{self, MaybeUninit},
+            };
+            use std::{sync::Once, vec::Vec};
+
+            use libc::{SIGBUS, SIGFPE, SIGILL, SIGSEGV, SIGTRAP, sigaction};
+            use setjmp::{jmp_buf, siglongjmp, sigsetjmp};
+
             std::thread_local! {
                 static CONTEXT_STACK: RefCell<Vec<jmp_buf>> = const { RefCell::new(Vec::new()) };
             }
@@ -269,7 +280,6 @@ mod unix {
                 }
             }
 
-            // Todo: Safely manage `sigaction` race conditions
             static REGISTER_HANDLER: Once = Once::new();
             REGISTER_HANDLER.call_once(|| {
                 let act = sigaction {
@@ -315,6 +325,7 @@ mod tests {
     use crate::os::{OsImpl, exception::ExceptionFunctionsEx};
 
     #[test]
+    #[cfg(any(windows, feature = "unix_try_except"))]
     fn test_exception() {
         let result = OsImpl.try_except(|| unsafe {
             std::println!("before exception");

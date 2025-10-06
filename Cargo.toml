@@ -14,8 +14,6 @@ default = ["std", "default_alloc"]
 std = [
     "dep:region",
     "dep:microseh",
-    "dep:libc",
-    "dep:setjmp"
 ]
 block_alloc = ["dep:talc"]
 default_alloc = [
@@ -23,6 +21,11 @@ default_alloc = [
     "block_alloc", 
     "dep:parking_lot",
     "closure-ffi/default_jit_alloc"
+]
+unix_try_except = [
+    "std",
+    "dep:libc",
+    "dep:setjmp"
 ]
 
 nightly = [
